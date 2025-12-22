@@ -1,0 +1,4 @@
+app:
+  name: dns-core
+web:
+  listen: ":8080"
