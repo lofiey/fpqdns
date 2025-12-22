@@ -1,5 +1,7 @@
 package web
 
+mux.HandleFunc("/api/stats", statsHandler)
+
 import (
 	"encoding/json"
 	"log"
