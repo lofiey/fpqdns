@@ -18,7 +18,6 @@ type Server struct {
 
 func New(addr string) *Server {
 	b := blocker.New()
-	// 启动时加载拦截规则（文件不存在不致命）
 	_ = b.LoadFile("assets/block/block.txt")
 
 	return &Server{
@@ -47,7 +46,6 @@ func (s *Server) Start() error {
 		WriteTimeout: 5 * time.Second,
 	}
 
-	// TCP 单独 goroutine
 	go func() {
 		log.Println("TCP DNS listening on", s.addr)
 		if err := s.tcpServer.ListenAndServe(); err != nil {
@@ -68,10 +66,30 @@ func (s *Server) Stop() {
 	}
 }
 
+func ensureEDNS0(req *dns.Msg) {
+	if opt := req.IsEdns0(); opt != nil {
+		opt.SetDo()
+		return
+	}
+
+	opt := &dns.OPT{
+		Hdr: dns.RR_Header{
+			Name:   ".",
+			Rrtype: dns.TypeOPT,
+		},
+	}
+	opt.SetDo()
+	opt.SetUDPSize(1232)
+	req.Extra = append(req.Extra, opt)
+}
+
 func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	if len(r.Question) == 0 {
 		return
 	}
+
+	// ✅ 确保 DNSSEC 能力透传
+	ensureEDNS0(r)
 
 	q := r.Question[0]
 	domain := q.Name
@@ -83,9 +101,9 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
-	// 2️⃣ 转发到上游
+	// 2️⃣ 上游转发（保持 DO 位）
 	client := &dns.Client{
-		Net: w.LocalAddr().Network(), // udp / tcp
+		Net:     w.LocalAddr().Network(),
 		Timeout: 5 * time.Second,
 	}
 
