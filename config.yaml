@@ -1,4 +1,117 @@
-app:
-  name: dns-core
+# =========================
+# DNS Core Configuration
+# =========================
+
+# -------------------------
+# 基础监听配置
+# -------------------------
+listen:
+  dns: ":53"            # UDP / TCP
+  doh: ":443"           # DoH / DoH3
+  dot: ":853"           # DoT / DoQ
+  web: ":8080"          # Web 管理面板
+
+# -------------------------
+# Web 管理面板
+# -------------------------
 web:
-  listen: ":8080"
+  enable: true
+  username: admin
+  password: admin123
+
+# -------------------------
+# TLS / HTTPS / QUIC
+# -------------------------
+tls:
+  enable: false                 # true 时启用 DoT / DoQ / DoH3
+  cert_file: cert.pem
+  key_file: key.pem
+
+  # Let's Encrypt（已预留）
+  acme:
+    enable: false
+    email: admin@example.com
+    domain: dns.example.com
+    cache_dir: data/acme
+
+# -------------------------
+# 上游 DNS
+# -------------------------
+upstream:
+  timeout: 5s
+
+  china:
+    - 223.5.5.5
+    - 119.29.29.29
+
+  foreign:
+    - 1.1.1.1
+    - 8.8.8.8
+    - tls://1.0.0.1
+    - https://dns.google/dns-query
+
+# -------------------------
+# 智能分流 / Geo 数据
+# -------------------------
+routing:
+  enable: true
+
+  # 本地 Geo 数据路径
+  geoip_file: data/geoip.dat
+  geosite_file: data/geosite.dat
+
+  # Geo 数据下载地址（已定）
+  geoip_download_url: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat
+  geosite_download_url: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat
+
+  china_list:
+    - cn
+    - private
+
+# -------------------------
+# ECS（EDNS Client Subnet）
+# -------------------------
+ecs:
+  enable: true
+
+  china_ip: 223.5.5.5
+  foreign_ip: 1.1.1.1
+
+  mask_v4: 24
+  mask_v6: 56
+
+# -------------------------
+# 缓存
+# -------------------------
+cache:
+  enable: true
+  size: 40960          # 最大缓存条目数
+  min_ttl: 30
+  max_ttl: 86400
+
+# -------------------------
+# 域名拦截（AdGuard 风格）
+# -------------------------
+block:
+  enable: true
+
+  # 本地规则
+  local_file: assets/block/block.txt
+
+  # 远程规则（txt 格式）
+  remote_files:
+    # - https://example.com/adblock.txt
+
+  refresh_interval: 6h
+
+# -------------------------
+# DNSSEC
+# -------------------------
+dnssec:
+  enable: true
+
+# -------------------------
+# 日志
+# -------------------------
+log:
+  level: info          # debug / info / warn / error
