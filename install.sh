@@ -30,14 +30,6 @@ rm -rf "${INSTALL_DIR}"
 git clone https://github.com/lofiey/fpqdns.git "${INSTALL_DIR}"
 cd "${INSTALL_DIR}"
 
-# 4. 修复 go.mod（兜底）
-echo "==> 初始化 go.mod"
-cat > go.mod <<'EOF'
-module fpqdns
-
-go 1.22
-EOF
-
 # 5. 依赖整理
 echo "==> 拉取 Go 依赖"
 go mod tidy
