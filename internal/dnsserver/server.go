@@ -2,6 +2,7 @@ package dnsserver
 
 import (
 	"log"
+	"net/http"
 
 	"dns-core/internal/blocker"
 	"dns-core/internal/cache"
@@ -27,17 +28,27 @@ func New(addr string) *Server {
 	// Web panel
 	web.New(b).Start(":8080")
 
-	// DoH HTTPS
+	// DoH handler
 	dohServer := doh.New(r.Resolve)
-	go func() {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/dns-query", dohServer.Handler)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dns-query", dohServer.Handler)
 
-		err := doh.ListenHTTPS(":443", mux, doh.TLSConfig{
-			Domain: "你的域名.com",     // ← 改这里
-			Cache:  "./cert-cache",     // 证书缓存目录
-		})
-		if err != nil {
+	// TLS
+	tlsCfg, acme := doh.NewTLSConfig(doh.TLSConfig{
+		Domain: "你的域名.com", // ← 改
+		Cache:  "./cert-cache",
+	})
+
+	// HTTPS (HTTP/2)
+	go func() {
+		if err := doh.ListenHTTPS(":443", mux, tlsCfg, acme); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// HTTP/3 (QUIC)
+	go func() {
+		if err := doh.ListenHTTP3(":443", mux, tlsCfg); err != nil {
 			log.Fatal(err)
 		}
 	}()
