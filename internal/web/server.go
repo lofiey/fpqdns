@@ -1,9 +1,6 @@
 package web
 
-mux.HandleFunc("/api/stats", statsHandler)
-
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 
@@ -19,40 +16,24 @@ func New(b *blocker.Blocker) *Server {
 }
 
 func (s *Server) Start(addr string) {
-	http.HandleFunc("/", s.index)
-	http.HandleFunc("/block/list", s.list)
-	http.HandleFunc("/block/add", s.add)
-	http.HandleFunc("/block/del", s.del)
+	mux := http.NewServeMux()
 
-	log.Println("Web panel listening on", addr)
-	go http.ListenAndServe(addr, nil)
-}
+	// API
+	mux.HandleFunc("/api/stats", statsHandler)
 
-func (s *Server) index(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(200)
-	w.Write([]byte("dns-core web panel"))
-}
+	// 预留：block 管理 / 登录 / 配置
+	// mux.HandleFunc("/api/block", s.blockHandler)
 
-func (s *Server) list(w http.ResponseWriter, _ *http.Request) {
-	json.NewEncoder(w).Encode(s.blocker.List())
-}
+	// 首页（占位）
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("DNS Core Web Panel"))
+	})
 
-func (s *Server) add(w http.ResponseWriter, r *http.Request) {
-	domain := r.URL.Query().Get("domain")
-	if domain == "" {
-		http.Error(w, "missing domain", 400)
-		return
-	}
-	_ = s.blocker.Add(domain)
-	w.WriteHeader(200)
-}
-
-func (s *Server) del(w http.ResponseWriter, r *http.Request) {
-	domain := r.URL.Query().Get("domain")
-	if domain == "" {
-		http.Error(w, "missing domain", 400)
-		return
-	}
-	_ = s.blocker.Remove(domain)
-	w.WriteHeader(200)
+	go func() {
+		log.Println("Web panel listening on", addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			log.Fatal(err)
+		}
+	}()
 }
