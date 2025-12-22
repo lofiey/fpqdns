@@ -6,21 +6,24 @@ import (
 
 	"dns-core/internal/blocker"
 	"dns-core/internal/cache"
+	"dns-core/internal/web"
 
 	"github.com/miekg/dns"
 )
 
 type Server struct {
-	addr      string
-	udpServer *dns.Server
-	tcpServer *dns.Server
-	blocker   *blocker.Blocker
-	cache     *cache.Cache
+	addr    string
+	blocker *blocker.Blocker
+	cache   *cache.Cache
 }
 
 func New(addr string) *Server {
 	b := blocker.New()
 	_ = b.LoadFile("assets/block/block.txt")
+	_ = b.Watch()
+
+	w := web.New(b)
+	w.Start(":8080")
 
 	return &Server{
 		addr:    addr,
@@ -31,108 +34,62 @@ func New(addr string) *Server {
 
 func (s *Server) Start() error {
 	handler := dns.NewServeMux()
-	handler.HandleFunc(".", s.handleQuery)
-
-	s.udpServer = &dns.Server{
-		Addr:         s.addr,
-		Net:          "udp",
-		Handler:      handler,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 5 * time.Second,
-	}
-
-	s.tcpServer = &dns.Server{
-		Addr:         s.addr,
-		Net:          "tcp",
-		Handler:      handler,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 5 * time.Second,
-	}
+	handler.HandleFunc(".", s.handle)
 
 	go func() {
 		log.Println("TCP DNS listening on", s.addr)
-		_ = s.tcpServer.ListenAndServe()
+		_ = (&dns.Server{
+			Addr:    s.addr,
+			Net:     "tcp",
+			Handler: handler,
+		}).ListenAndServe()
 	}()
 
 	log.Println("UDP DNS listening on", s.addr)
-	return s.udpServer.ListenAndServe()
+	return (&dns.Server{
+		Addr:    s.addr,
+		Net:     "udp",
+		Handler: handler,
+	}).ListenAndServe()
 }
 
-func (s *Server) Stop() {
-	if s.udpServer != nil {
-		_ = s.udpServer.Shutdown()
-	}
-	if s.tcpServer != nil {
-		_ = s.tcpServer.Shutdown()
-	}
-}
-
-func ensureEDNS0(req *dns.Msg) {
-	if opt := req.IsEdns0(); opt != nil {
+func ensureEDNS0(m *dns.Msg) {
+	if opt := m.IsEdns0(); opt != nil {
 		opt.SetDo()
 		return
 	}
-
-	opt := &dns.OPT{
-		Hdr: dns.RR_Header{
-			Name:   ".",
-			Rrtype: dns.TypeOPT,
-		},
-	}
-	opt.SetDo()
-	opt.SetUDPSize(1232)
-	req.Extra = append(req.Extra, opt)
+	o := &dns.OPT{}
+	o.Hdr.Name = "."
+	o.Hdr.Rrtype = dns.TypeOPT
+	o.SetDo()
+	o.SetUDPSize(1232)
+	m.Extra = append(m.Extra, o)
 }
 
-func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
+func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 	if len(r.Question) == 0 {
 		return
 	}
 
 	ensureEDNS0(r)
-
 	q := r.Question[0]
 
-	// 1️⃣ 先查缓存（含 CNAME 链）
+	if s.blocker.IsBlocked(q.Name) {
+		_ = w.WriteMsg(blocker.BlockResponse(r))
+		return
+	}
+
 	if msg := s.cache.Get(q); msg != nil {
 		_ = w.WriteMsg(msg)
 		return
 	}
-	if msg := cache.ResolveCNAME(q, s.cache); msg != nil {
-		_ = w.WriteMsg(msg)
-		return
-	}
 
-	// 2️⃣ Blocker
-	if s.blocker != nil && s.blocker.IsBlocked(q.Name) {
-		resp := blocker.BlockResponse(r)
-		_ = w.WriteMsg(resp)
-		return
-	}
-
-	// 3️⃣ 上游查询
-	client := &dns.Client{
-		Net:     w.LocalAddr().Network(),
-		Timeout: 5 * time.Second,
-	}
-
-	resp, _, err := client.Exchange(r, "8.8.8.8:53")
+	c := &dns.Client{Net: w.LocalAddr().Network(), Timeout: 5 * time.Second}
+	resp, _, err := c.Exchange(r, "8.8.8.8:53")
 	if err != nil {
-		log.Println("upstream error:", err)
 		return
 	}
 
-	// 4️⃣ 写入缓存（包括 CNAME）
-	for _, rr := range resp.Answer {
-		switch rr.Header().Rrtype {
-		case dns.TypeA, dns.TypeAAAA, dns.TypeCNAME:
-			s.cache.Set(dns.Question{
-				Name:   rr.Header().Name,
-				Qtype: rr.Header().Rrtype,
-				Qclass: dns.ClassINET,
-			}, resp)
-		}
-	}
-
+	s.cache.Set(q, resp)
 	_ = w.WriteMsg(resp)
 }
