@@ -9,24 +9,30 @@ import (
 
 type Server struct {
 	blocker *blocker.Blocker
+	auth    *Auth
 }
 
 func New(b *blocker.Blocker) *Server {
-	return &Server{blocker: b}
+	return &Server{
+		blocker: b,
+		auth: &Auth{
+			Username: "admin",
+			Password: "admin123", // ← 后面你可以配置化
+		},
+	}
 }
 
 func (s *Server) Start(addr string) {
 	mux := http.NewServeMux()
-    mux.HandleFunc("/api/block/list", s.blockList)
-    mux.HandleFunc("/api/block/add", s.blockAdd)
-    mux.HandleFunc("/api/block/delete", s.blockDelete)
-	// API
-	mux.HandleFunc("/api/stats", statsHandler)
 
-	// 预留：block 管理 / 登录 / 配置
-	// mux.HandleFunc("/api/block", s.blockHandler)
+	// API（全部需要鉴权）
+	mux.HandleFunc("/api/stats", s.auth.Middleware(statsHandler))
 
-	// 首页（占位）
+	mux.HandleFunc("/api/block/list", s.auth.Middleware(s.blockList))
+	mux.HandleFunc("/api/block/add", s.auth.Middleware(s.blockAdd))
+	mux.HandleFunc("/api/block/delete", s.auth.Middleware(s.blockDelete))
+
+	// 首页
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("DNS Core Web Panel"))
