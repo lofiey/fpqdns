@@ -13,23 +13,29 @@ type TLSConfig struct {
 	Cache  string
 }
 
-func ListenHTTPS(addr string, handler http.Handler, cfg TLSConfig) error {
+func NewTLSConfig(cfg TLSConfig) (*tls.Config, *autocert.Manager) {
 	m := &autocert.Manager{
 		Cache:      autocert.DirCache(cfg.Cache),
 		Prompt:     autocert.AcceptTOS,
 		HostPolicy: autocert.HostWhitelist(cfg.Domain),
 	}
 
-	server := &http.Server{
-		Addr: addr,
-		TLSConfig: &tls.Config{
-			GetCertificate: m.GetCertificate,
-			MinVersion:     tls.VersionTLS12,
-		},
-		Handler: handler,
+	tlsCfg := &tls.Config{
+		GetCertificate: m.GetCertificate,
+		MinVersion:     tls.VersionTLS13, // HTTP/3 必须 TLS 1.3
+		NextProtos:     []string{"h3", "h3-29", "h3-30", "h3-32"},
 	}
 
-	// HTTP-01 challenge
+	return tlsCfg, m
+}
+
+func ListenHTTPS(addr string, handler http.Handler, tlsCfg *tls.Config, m *autocert.Manager) error {
+	server := &http.Server{
+		Addr:      addr,
+		Handler:   handler,
+		TLSConfig: tlsCfg,
+	}
+
 	go func() {
 		log.Println("ACME HTTP challenge on :80")
 		_ = http.ListenAndServe(":80", m.HTTPHandler(nil))
