@@ -7,6 +7,8 @@ import (
 	"dns-core/internal/blocker"
 	"dns-core/internal/cache"
 	"dns-core/internal/doh"
+	"dns-core/internal/dot"
+	"dns-core/internal/doq"
 	"dns-core/internal/web"
 
 	"github.com/miekg/dns"
@@ -25,30 +27,32 @@ func New(addr string) *Server {
 	c := cache.New()
 	r := NewResolver(b, c)
 
-	// Web panel
+	// Web
 	web.New(b).Start(":8080")
 
-	// DoH handler
-	dohServer := doh.New(r.Resolve)
+	// DoH / DoH3
+	dohSrv := doh.New(r.Resolve)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/dns-query", dohServer.Handler)
+	mux.HandleFunc("/dns-query", dohSrv.Handler)
 
-	// TLS
 	tlsCfg, acme := doh.NewTLSConfig(doh.TLSConfig{
 		Domain: "你的域名.com", // ← 改
 		Cache:  "./cert-cache",
 	})
 
-	// HTTPS (HTTP/2)
+	go doh.ListenHTTPS(":443", mux, tlsCfg, acme)
+	go doh.ListenHTTP3(":443", mux, tlsCfg)
+
+	// DoT
 	go func() {
-		if err := doh.ListenHTTPS(":443", mux, tlsCfg, acme); err != nil {
+		if err := dot.Listen(":853", tlsCfg, r.Resolve); err != nil {
 			log.Fatal(err)
 		}
 	}()
 
-	// HTTP/3 (QUIC)
+	// DoQ
 	go func() {
-		if err := doh.ListenHTTP3(":443", mux, tlsCfg); err != nil {
+		if err := doq.Listen(":853", tlsCfg, r.Resolve); err != nil {
 			log.Fatal(err)
 		}
 	}()
