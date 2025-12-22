@@ -5,6 +5,8 @@ import (
 
 	"dns-core/internal/blocker"
 	"dns-core/internal/cache"
+	"dns-core/internal/ecs"
+	"dns-core/internal/geo"
 
 	"github.com/miekg/dns"
 )
@@ -12,10 +14,17 @@ import (
 type Resolver struct {
 	blocker *blocker.Blocker
 	cache   *cache.Cache
+	geosite *geo.GeoSite
 }
 
 func NewResolver(b *blocker.Blocker, c *cache.Cache) *Resolver {
-	return &Resolver{blocker: b, cache: c}
+	gs, _ := geo.LoadGeoSite("assets/geo/geosite.dat")
+
+	return &Resolver{
+		blocker: b,
+		cache:   c,
+		geosite: gs,
+	}
 }
 
 func ensureEDNS0(m *dns.Msg) {
@@ -49,8 +58,19 @@ func (r *Resolver) Resolve(req *dns.Msg) (*dns.Msg, error) {
 		return msg, nil
 	}
 
+	// 分流判断
+	isCN := r.geosite != nil && r.geosite.IsCN(q.Name)
+
+	upstream := "8.8.8.8:53"
+	if isCN {
+		upstream = "223.5.5.5:53" // 阿里 DNS 示例
+		ecs.Attach(req, "1.2.4.8", 24) // 国内 ECS 示例
+	} else {
+		ecs.Attach(req, "8.8.8.8", 24)
+	}
+
 	c := &dns.Client{Net: "udp", Timeout: 5 * time.Second}
-	resp, _, err := c.Exchange(req, "8.8.8.8:53")
+	resp, _, err := c.Exchange(req, upstream)
 	if err != nil {
 		return nil, err
 	}
