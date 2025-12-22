@@ -2,19 +2,18 @@ package dnsserver
 
 import (
 	"log"
-	"time"
 
 	"dns-core/internal/blocker"
 	"dns-core/internal/cache"
+	"dns-core/internal/doh"
 	"dns-core/internal/web"
 
 	"github.com/miekg/dns"
 )
 
 type Server struct {
-	addr    string
-	blocker *blocker.Blocker
-	cache   *cache.Cache
+	addr     string
+	resolver *Resolver
 }
 
 func New(addr string) *Server {
@@ -22,19 +21,33 @@ func New(addr string) *Server {
 	_ = b.LoadFile("assets/block/block.txt")
 	_ = b.Watch()
 
-	w := web.New(b)
-	w.Start(":8080")
+	c := cache.New()
+	r := NewResolver(b, c)
+
+	web.New(b).Start(":8080")
+
+	// DoH
+	dohServer := doh.New(r.Resolve)
+	go func() {
+		log.Println("DoH listening on :443 (/dns-query)")
+		http.HandleFunc("/dns-query", dohServer.Handler)
+		_ = http.ListenAndServe(":443", nil)
+	}()
 
 	return &Server{
-		addr:    addr,
-		blocker: b,
-		cache:   cache.New(),
+		addr:     addr,
+		resolver: r,
 	}
 }
 
 func (s *Server) Start() error {
 	handler := dns.NewServeMux()
-	handler.HandleFunc(".", s.handle)
+	handler.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+		resp, err := s.resolver.Resolve(r)
+		if err == nil && resp != nil {
+			_ = w.WriteMsg(resp)
+		}
+	})
 
 	go func() {
 		log.Println("TCP DNS listening on", s.addr)
@@ -51,45 +64,4 @@ func (s *Server) Start() error {
 		Net:     "udp",
 		Handler: handler,
 	}).ListenAndServe()
-}
-
-func ensureEDNS0(m *dns.Msg) {
-	if opt := m.IsEdns0(); opt != nil {
-		opt.SetDo()
-		return
-	}
-	o := &dns.OPT{}
-	o.Hdr.Name = "."
-	o.Hdr.Rrtype = dns.TypeOPT
-	o.SetDo()
-	o.SetUDPSize(1232)
-	m.Extra = append(m.Extra, o)
-}
-
-func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
-	if len(r.Question) == 0 {
-		return
-	}
-
-	ensureEDNS0(r)
-	q := r.Question[0]
-
-	if s.blocker.IsBlocked(q.Name) {
-		_ = w.WriteMsg(blocker.BlockResponse(r))
-		return
-	}
-
-	if msg := s.cache.Get(q); msg != nil {
-		_ = w.WriteMsg(msg)
-		return
-	}
-
-	c := &dns.Client{Net: w.LocalAddr().Network(), Timeout: 5 * time.Second}
-	resp, _, err := c.Exchange(r, "8.8.8.8:53")
-	if err != nil {
-		return
-	}
-
-	s.cache.Set(q, resp)
-	_ = w.WriteMsg(resp)
 }
