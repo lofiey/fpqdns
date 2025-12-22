@@ -18,7 +18,6 @@ func New(r Resolver) *Server {
 }
 
 func (s *Server) Handler(w http.ResponseWriter, r *http.Request) {
-	// RFC 8484：浏览器直接 GET 必须拒绝
 	if r.Method != http.MethodPost {
 		http.NotFound(w, r)
 		return
@@ -43,7 +42,7 @@ func (s *Server) Handler(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.resolve(req)
 	if err != nil {
-		http.Error(w, "dns resolve failed", http.StatusInternalServerError)
+		http.Error(w, "resolve failed", http.StatusInternalServerError)
 		return
 	}
 
