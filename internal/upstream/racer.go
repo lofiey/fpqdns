@@ -27,11 +27,11 @@ func Race(req *dns.Msg, ups []Upstream) (*dns.Msg, error) {
 		go func(up Upstream) {
 			defer wg.Done()
 
-			r, _, err := up.Exchange(req)
+			resp, _, err := up.Exchange(req)
 			select {
-			case ch <- Result{Resp: r, Err: err, Addr: up.Addr}:
+			case ch <- Result{Resp: resp, Err: err, Addr: up.Addr}:
 			case <-ctx.Done():
-				// 被取消：正常情况
+				// 主动取消，不算错误
 			}
 		}(u)
 	}
@@ -42,10 +42,9 @@ func Race(req *dns.Msg, ups []Upstream) (*dns.Msg, error) {
 		select {
 		case r := <-ch:
 			if r.Err == nil && r.Resp != nil {
-				cancel() // 主动取消其它
+				cancel()
 				return r.Resp, nil
 			}
-			// 记录真实错误（后面面板用）
 		case <-timeout:
 			return nil, errors.New("all upstreams timeout")
 		}
