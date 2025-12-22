@@ -24,14 +24,22 @@ func New(addr string) *Server {
 	c := cache.New()
 	r := NewResolver(b, c)
 
+	// Web panel
 	web.New(b).Start(":8080")
 
-	// DoH
+	// DoH HTTPS
 	dohServer := doh.New(r.Resolve)
 	go func() {
-		log.Println("DoH listening on :443 (/dns-query)")
-		http.HandleFunc("/dns-query", dohServer.Handler)
-		_ = http.ListenAndServe(":443", nil)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/dns-query", dohServer.Handler)
+
+		err := doh.ListenHTTPS(":443", mux, doh.TLSConfig{
+			Domain: "你的域名.com",     // ← 改这里
+			Cache:  "./cert-cache",     // 证书缓存目录
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
 	}()
 
 	return &Server{
