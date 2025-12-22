@@ -14,24 +14,29 @@ func statsHandler(w http.ResponseWriter, _ *http.Request) {
 
 	resp := map[string]any{
 		"uptime": time.Since(m.StartTime).String(),
+
 		"query": map[string]uint64{
 			"total":   m.Query.Total,
 			"cn":      m.Query.CN,
 			"foreign": m.Query.Foreign,
 		},
+
 		"cache": map[string]uint64{
 			"hit":  m.CacheHit,
 			"miss": m.CacheMiss,
 		},
+
 		"top": map[string]any{
 			"domain": m.TopDomain.Top(5),
 			"client": m.TopClient.Top(5),
 		},
+
+		"upstreams": metrics.SnapshotUpstreams(),
+
 		"runtime": map[string]any{
 			"goroutine": runtime.NumGoroutine(),
-			"memory":    runtime.MemStats{},
 		},
 	}
 
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
