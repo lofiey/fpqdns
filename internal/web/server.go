@@ -17,7 +17,9 @@ func New(b *blocker.Blocker) *Server {
 
 func (s *Server) Start(addr string) {
 	mux := http.NewServeMux()
-
+    mux.HandleFunc("/api/block/list", s.blockList)
+    mux.HandleFunc("/api/block/add", s.blockAdd)
+    mux.HandleFunc("/api/block/delete", s.blockDelete)
 	// API
 	mux.HandleFunc("/api/stats", statsHandler)
 
