@@ -2,89 +2,62 @@ package dnsserver
 
 import (
 	"log"
-	"net/http"
+	"sync"
 
-	"dns-core/internal/blocker"
-	"dns-core/internal/cache"
-	"dns-core/internal/doh"
-	"dns-core/internal/dot"
-	"dns-core/internal/doq"
+	"dns-core/internal/geo"
 	"dns-core/internal/web"
-
-	"github.com/miekg/dns"
 )
 
 type Server struct {
-	addr     string
-	resolver *Resolver
+	addr string
+
+	geo *geo.Matcher
+
+	once sync.Once
 }
 
+// New 创建 DNS Server
 func New(addr string) *Server {
-	b := blocker.New()
-	_ = b.LoadFile("assets/block/block.txt")
-	_ = b.Watch()
-
-	c := cache.New()
-	r := NewResolver(b, c)
-
-	// Web
-	web.New(b).Start(":8080")
-
-	// DoH / DoH3
-	dohSrv := doh.New(r.Resolve)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/dns-query", dohSrv.Handler)
-
-	tlsCfg, acme := doh.NewTLSConfig(doh.TLSConfig{
-		Domain: "你的域名.com", // ← 改
-		Cache:  "./cert-cache",
+	// ===== Geo 自动下载 + 加载 =====
+	g, err := geo.Load(geo.Config{
+		GeoIPFile:          "data/geoip.dat",
+		GeoSiteFile:        "data/geosite.dat",
+		GeoIPDownloadURL:   "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
+		GeoSiteDownloadURL: "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
 	})
-
-	go doh.ListenHTTPS(":443", mux, tlsCfg, acme)
-	go doh.ListenHTTP3(":443", mux, tlsCfg)
-
-	// DoT
-	go func() {
-		if err := dot.Listen(":853", tlsCfg, r.Resolve); err != nil {
-			log.Fatal(err)
-		}
-	}()
-
-	// DoQ
-	go func() {
-		if err := doq.Listen(":853", tlsCfg, r.Resolve); err != nil {
-			log.Fatal(err)
-		}
-	}()
+	if err != nil {
+		log.Println("[dns] geo load error:", err)
+	}
 
 	return &Server{
-		addr:     addr,
-		resolver: r,
+		addr: addr,
+		geo:  g,
 	}
 }
 
+// Start 启动所有服务（只会执行一次）
 func (s *Server) Start() error {
-	handler := dns.NewServeMux()
-	handler.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
-		resp, err := s.resolver.Resolve(r)
-		if err == nil && resp != nil {
-			_ = w.WriteMsg(resp)
-		}
+	var err error
+
+	s.once.Do(func() {
+		// ===== DNS 核心 =====
+		go s.listenUDP()
+		go s.listenTCP()
+		go s.listenDoH()
+
+		// ===== Web 管理面板 =====
+		go func() {
+			w := web.New(nil) // blocker 已在内部管理
+			w.Start(":8080")
+		}()
+
+		log.Println("[dns] server started")
 	})
 
-	go func() {
-		log.Println("TCP DNS listening on", s.addr)
-		_ = (&dns.Server{
-			Addr:    s.addr,
-			Net:     "tcp",
-			Handler: handler,
-		}).ListenAndServe()
-	}()
+	return err
+}
 
-	log.Println("UDP DNS listening on", s.addr)
-	return (&dns.Server{
-		Addr:    s.addr,
-		Net:     "udp",
-		Handler: handler,
-	}).ListenAndServe()
+// GeoMatcher 暴露给 resolver 使用
+func (s *Server) GeoMatcher() *geo.Matcher {
+	return s.geo
 }
