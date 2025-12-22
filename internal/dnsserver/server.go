@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"dns-core/internal/blocker"
+	"dns-core/internal/cache"
 
 	"github.com/miekg/dns"
 )
@@ -14,6 +15,7 @@ type Server struct {
 	udpServer *dns.Server
 	tcpServer *dns.Server
 	blocker   *blocker.Blocker
+	cache     *cache.Cache
 }
 
 func New(addr string) *Server {
@@ -23,6 +25,7 @@ func New(addr string) *Server {
 	return &Server{
 		addr:    addr,
 		blocker: b,
+		cache:   cache.New(),
 	}
 }
 
@@ -48,9 +51,7 @@ func (s *Server) Start() error {
 
 	go func() {
 		log.Println("TCP DNS listening on", s.addr)
-		if err := s.tcpServer.ListenAndServe(); err != nil {
-			log.Println("TCP DNS stopped:", err)
-		}
+		_ = s.tcpServer.ListenAndServe()
 	}()
 
 	log.Println("UDP DNS listening on", s.addr)
@@ -88,20 +89,28 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
-	// ✅ 确保 DNSSEC 能力透传
 	ensureEDNS0(r)
 
 	q := r.Question[0]
-	domain := q.Name
 
-	// 1️⃣ 拦截优先
-	if s.blocker != nil && s.blocker.IsBlocked(domain) {
+	// 1️⃣ 先查缓存（含 CNAME 链）
+	if msg := s.cache.Get(q); msg != nil {
+		_ = w.WriteMsg(msg)
+		return
+	}
+	if msg := cache.ResolveCNAME(q, s.cache); msg != nil {
+		_ = w.WriteMsg(msg)
+		return
+	}
+
+	// 2️⃣ Blocker
+	if s.blocker != nil && s.blocker.IsBlocked(q.Name) {
 		resp := blocker.BlockResponse(r)
 		_ = w.WriteMsg(resp)
 		return
 	}
 
-	// 2️⃣ 上游转发（保持 DO 位）
+	// 3️⃣ 上游查询
 	client := &dns.Client{
 		Net:     w.LocalAddr().Network(),
 		Timeout: 5 * time.Second,
@@ -109,8 +118,20 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 
 	resp, _, err := client.Exchange(r, "8.8.8.8:53")
 	if err != nil {
-		log.Println("upstream exchange error:", err)
+		log.Println("upstream error:", err)
 		return
+	}
+
+	// 4️⃣ 写入缓存（包括 CNAME）
+	for _, rr := range resp.Answer {
+		switch rr.Header().Rrtype {
+		case dns.TypeA, dns.TypeAAAA, dns.TypeCNAME:
+			s.cache.Set(dns.Question{
+				Name:   rr.Header().Name,
+				Qtype: rr.Header().Rrtype,
+				Qclass: dns.ClassINET,
+			}, resp)
+		}
 	}
 
 	_ = w.WriteMsg(resp)
